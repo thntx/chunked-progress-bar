@@ -26,7 +26,14 @@ class ProgressBarWidget(QWidget):
         self.is_hovering = False
         self.hover_index = -1
         self.hover_callback = None
-        
+
+        # Sibling bar (set by layout.init_widgets) used to keep hover alive
+        # while the cursor sits in the small gap between the two stacked bars.
+        self.sibling_bar = None
+        self._gap_watch = QTimer(self)
+        self._gap_watch.setInterval(100)
+        self._gap_watch.timeout.connect(self._check_gap_hover)
+
         # Live Timer Trigger
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update)
@@ -36,6 +43,12 @@ class ProgressBarWidget(QWidget):
         # Check timer config to start/stop provided in update_config
 
     def enterEvent(self, event):
+        self._gap_watch.stop()
+        if self.sibling_bar is not None:
+            try:
+                self.sibling_bar._gap_watch.stop()
+            except RuntimeError:
+                pass
         self.is_hovering = True
         if self.hover_callback:
             self.hover_callback(True)
@@ -43,19 +56,82 @@ class ProgressBarWidget(QWidget):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        if self._cursor_in_sibling_gap():
+            # The cursor only moved into the small gap between the two bars:
+            # keep hover active and watch until it truly leaves the area.
+            self._gap_watch.start()
+            super().leaveEvent(event)
+            return
         self.is_hovering = False
         self.hover_index = -1
         if self.hover_callback:
             self.hover_callback(False)
         self.update()
         super().leaveEvent(event)
-    
+
     def set_hover_state(self, is_hovering):
         """Called by sibling widget to synchronize hover state"""
         self.is_hovering = is_hovering
         if not is_hovering:
             self.hover_index = -1
         self.update()
+
+    GAP_HOVER_TOLERANCE = 12  # px: max height treated as "small gap" between the bars
+
+    def _sibling_gap_rect(self):
+        """Global rect spanning this bar and its sibling's facing edges, when
+        both bars are docked in the same place (stacked with a small gap)."""
+        sib = self.sibling_bar
+        if sib is None:
+            return None
+        try:
+            if not self.isVisible() or not sib.isVisible():
+                return None
+            r1 = QRect(self.mapToGlobal(QPoint(0, 0)), self.size())
+            r2 = QRect(sib.mapToGlobal(QPoint(0, 0)), sib.size())
+        except RuntimeError:
+            # Sibling widget was deleted
+            return None
+        top, bottom = (r1, r2) if r1.top() <= r2.top() else (r2, r1)
+        gap_h = bottom.top() - top.bottom() - 1
+        if gap_h < 0 or gap_h > self.GAP_HOVER_TOLERANCE:
+            return None
+        left = max(top.left(), bottom.left())
+        right = min(top.right(), bottom.right())
+        if right < left:
+            return None
+        # Include the boundary rows of both bars so edge pixels count as inside
+        return QRect(QPoint(left, top.bottom()), QPoint(right, bottom.top()))
+
+    def _cursor_in_sibling_gap(self):
+        gap = self._sibling_gap_rect()
+        return gap is not None and gap.contains(QCursor.pos())
+
+    def _check_gap_hover(self):
+        if self._cursor_in_sibling_gap():
+            return  # still in the gap: keep hovering
+        self._gap_watch.stop()
+        # If the cursor moved into one of the bars its enterEvent keeps hover on
+        try:
+            if self.underMouse() or (self.sibling_bar is not None and self.sibling_bar.underMouse()):
+                return
+        except RuntimeError:
+            pass
+        self.is_hovering = False
+        self.hover_index = -1
+        if self.hover_callback:
+            self.hover_callback(False)
+        self.update()
+
+    @staticmethod
+    def is_perfect_grade(status, include_hard):
+        """True if a status_log entry counts towards a perfect chunk.
+        Grades: 1=Again, 2=Hard, 3=Good, 4=Easy. True = legacy pass."""
+        if status is True:
+            return True
+        if isinstance(status, bool) or not isinstance(status, int):
+            return False  # fails, undone, buried and suspended break perfection
+        return status >= (2 if include_hard else 3)
 
     def set_params(self, total, current, status_log=[], time_log=[], start_time=0, initial_total=None):
         self.total = total
@@ -269,7 +345,6 @@ class ProgressBarWidget(QWidget):
         bar_height = height 
         
         # Configs
-        config = mw.addonManager.getConfig(__name__)
         fail_policy = self.get("fail_policy")
         vis_opts = self.get("visual_options")
         auto_hide = self.get("visual_options", "auto_hide_text") 
@@ -634,6 +709,16 @@ class ProgressBarWidget(QWidget):
                              # Mixed skipped (e.g. 5 buried, 5 suspended) -> Default to Buried or whichever is majority?
                              # Let's say Buried is 'safer' color, or majority wins
                              final_color = self.runtime_colors["buried"] if buried_count >= suspended_count else self.runtime_colors["suspended"]
+
+                    # Perfect Chunk Override
+                    # A chunk is perfect when every card in it was answered with a
+                    # passing grade (Good/Easy, plus Hard if perfect_include_hard).
+                    # Anything else (Again, undone, buried, suspended) breaks it.
+                    if chunk_slice and self.get("visual_options", "highlight_perfect"):
+                        include_hard = self.get("visual_options", "perfect_include_hard")
+                        if all(self.is_perfect_grade(s, include_hard) for s in chunk_slice):
+                            final_color = self.runtime_colors.get("perfect_color", final_color)
+                            pattern_color = None
 
                     # 3. Paint
                     if pattern_color:

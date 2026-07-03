@@ -42,6 +42,8 @@ def init_widgets():
     # Link hover states
     chunk_widget.hover_callback = card_widget.set_hover_state
     card_widget.hover_callback = chunk_widget.set_hover_state
+    chunk_widget.sibling_bar = card_widget
+    card_widget.sibling_bar = chunk_widget
     
     apply_layout(config)
     
