@@ -46,4 +46,10 @@ Open **Tools → Progress Bar Settings**, or simply **double-click either bar**.
 
 ## Installation
 
-Copy this folder into your Anki add-ons directory (**Tools → Add-ons → View Files**), then restart Anki.
+In Anki, go to **Tools → Add-ons → Get Add-ons…**, paste this code and restart Anki:
+
+```
+1724662218
+```
+
+You can also find it on [AnkiWeb](https://ankiweb.net/shared/info/1724662218).
