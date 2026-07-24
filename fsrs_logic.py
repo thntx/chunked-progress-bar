@@ -129,6 +129,28 @@ def get_avg_retention(deck_id):
         
     return sum(retentions) / len(retentions)
 
+def _canon_ce(ce):
+    """Canonical, comparison-friendly view of a chunk_evaluation dict: only the
+    fields that affect the colouring, with floats rounded and numbers coerced.
+    This lets us detect a *real* colouring change while ignoring int/float and
+    float-precision noise, so the tooltip fires only when the colouring truly
+    changes (and not on every deck selection)."""
+    ce = ce or {}
+    w = ce.get("weights", {}) or {}
+    weights = tuple(round(float(w.get(k, 0.0)), 6) for k in ("again", "hard", "good", "easy"))
+    ivs = []
+    for iv in (ce.get("intervals", []) or []):
+        ivs.append((
+            bool(iv.get("enabled", True)),
+            iv.get("start_bracket"),
+            round(float(iv.get("start_val", 0.0)), 6),
+            round(float(iv.get("end_val", 0.0)), 6),
+            iv.get("end_bracket"),
+            iv.get("color_key"),
+            iv.get("pattern_key"),
+        ))
+    return (weights, tuple(ivs))
+
 def check_fsrs_deck_update(force=False):
     """
     Checks if deck changed and updates config with deck-specific FSRS retention.
@@ -180,10 +202,13 @@ def check_fsrs_deck_update(force=False):
         "intervals": intervals
     }
     
-    # Compare with existing
+    # Compare with existing, ignoring int/float and float-precision noise so we
+    # only act on a genuinely different colouring (fixes the "updated intervals"
+    # tooltip firing on every deck selection).
     current_ce = config.get("chunk_evaluation", {})
-    
-    if new_ce != current_ce:
+    changed = _canon_ce(new_ce) != _canon_ce(current_ce)
+
+    if changed:
         config["chunk_evaluation"] = new_ce
         # Persist
         mw.addonManager.writeConfig(__name__, config)
@@ -192,12 +217,11 @@ def check_fsrs_deck_update(force=False):
         fresh_config = mw.addonManager.getConfig(__name__)
         from . import layout
         layout.update_all_widgets(fresh_config)
-        
-        # Notify User
+
+        # Notify User (only reached when the colouring actually changed)
         if using_fallback:
-             tooltip(f"Could not fetch FSRS targets for '{dname}', using default {retention*100:.0f}%")
+            tooltip(f"Could not fetch FSRS targets for '{dname}', using default {retention*100:.0f}%")
         else:
-             tooltip(f"Updated coloring intervals for {retention*100:.0f}% desired retention", period=3000)
-             
-        return True
-    return False
+            tooltip(f"Updated coloring intervals for {retention*100:.0f}% desired retention", period=3000)
+
+    return changed

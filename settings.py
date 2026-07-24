@@ -1,10 +1,12 @@
 
 from aqt.qt import *
 from aqt import mw
+from aqt.utils import tooltip, showWarning
 
 from . import progressbar
 from . import fsrs_logic
 import copy
+import json
 from .config_utils import DEFAULT_CONFIG, get_config_val
 
 class NoScrollComboBox(QComboBox):
@@ -458,9 +460,34 @@ class SettingsDialog(QDialog):
         
         # Restore Defaults Tab Behaviour
         add_reset_btn(behaviour_layout, self.reset_tab_behaviour, "Restore Tab Defaults")
-        
+
+        # --- Import / Export tab ---
+        io_widget = QWidget()
+        io_layout = QVBoxLayout()
+        io_desc = QLabel(
+            "Save every add-on setting to a file, or load them back from one.\n\n"
+            "Importing replaces all current settings and closes this window; "
+            "reopen it to review the imported values."
+        )
+        io_desc.setWordWrap(True)
+        io_layout.addWidget(io_desc)
+
+        export_btn = QPushButton("Export settings…")
+        export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        export_btn.clicked.connect(self.export_settings)
+        io_layout.addWidget(export_btn)
+
+        import_btn = QPushButton("Import settings…")
+        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        import_btn.clicked.connect(self.import_settings)
+        io_layout.addWidget(import_btn)
+
+        io_layout.addStretch()
+        io_widget.setLayout(io_layout)
+        self.tabs.addTab(io_widget, "Import/Export")
+
         self.tabs.setCurrentIndex(0)
-        
+
         # --- Main Buttons ---
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         restore_btn = btns.addButton("Restore Defaults", QDialogButtonBox.ButtonRole.ResetRole)
@@ -704,6 +731,60 @@ class SettingsDialog(QDialog):
         # Restore original config on Cancel
         mw.addonManager.writeConfig(__name__, self.original_config)
         super().reject()
+
+    def export_settings(self):
+        # Scrape the current UI into self.config, then write it to a file.
+        self.live_update_handler()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Progress Bar settings",
+            "chunked_progress_bar_settings.json", "JSON files (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=4)
+            tooltip("Settings exported")
+        except Exception as e:
+            showWarning(f"Could not export settings:\n{e}")
+
+    def import_settings(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Progress Bar settings", "", "JSON files (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("File does not contain a settings object.")
+        except Exception as e:
+            showWarning(f"Could not read settings file:\n{e}")
+            return
+        # Persist the imported settings and refresh the bars via the config hook.
+        mw.addonManager.writeConfig(__name__, data)
+        if hasattr(self, "live_callback"):
+            self.live_callback(mw.addonManager.getConfig(__name__))
+        # Rebuild the open dialog with the imported values so the user sees them
+        # right away, without closing the window.
+        self.reload_from_config(data)
+        tooltip("Settings imported")
+
+    def reload_from_config(self, config):
+        """Rebuild the whole dialog UI in place from `config` (used after Import)."""
+        self.config = copy.deepcopy(config)
+        self.colours = self.config.get("colors", self.default_config.get("colors", {}))
+        self.original_config = copy.deepcopy(config)
+        self.style_widgets = {}
+        # Detach the current layout onto a throwaway widget so setup_ui() can
+        # install a fresh one (a QWidget can only have one layout).
+        old = self.layout()
+        if old is not None:
+            junk = QWidget()
+            junk.setLayout(old)
+            junk.deleteLater()
+        self.setup_ui()
+        self.connect_live_preview()
+        self.setup_intervals_ui()
 
     def connect_live_preview(self):
         # Connect all widgets to update handler

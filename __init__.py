@@ -1,10 +1,11 @@
 from aqt import mw
 import aqt
 from aqt.reviewer import Reviewer
-from aqt.gui_hooks import reviewer_did_answer_card, state_did_change, sync_did_finish, reviewer_did_show_question
+from aqt.gui_hooks import reviewer_did_answer_card, state_did_change, sync_did_finish, reviewer_did_show_question, profile_did_open
 from aqt.qt import *
 from . import logic
 from . import layout
+from . import notices
 
 # Initialize UI
 layout.init_widgets()
@@ -14,6 +15,10 @@ reviewer_did_answer_card.append(logic.on_answer)
 reviewer_did_show_question.append(logic.on_show_question)
 state_did_change.append(logic.on_state_change)
 sync_did_finish.append(logic.on_sync_finished)
+
+# One-time "a default changed in this update" notices (deferred so the main
+# window is fully ready before any popup shows).
+profile_did_open.append(lambda: QTimer.singleShot(500, notices.check_default_change_notices))
 
 # --- BURY HOOKS ---
 # We always wrap the manually triggered methods (Menu/Shortcuts) because Anki's hook might not fire for them

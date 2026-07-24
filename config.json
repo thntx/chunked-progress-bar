@@ -11,7 +11,7 @@
         "use_good_for_all_pass": false,
         "highlight_perfect": false,
         "perfect_include_hard": true,
-        "perfect_color": "#FF3388"
+        "perfect_color": "#FFFFFF"
     },
     "chunk_evaluation": {
         "weights": {
@@ -97,7 +97,8 @@
         "suspended": "#663333",
         "deleted": "#666666",
         "current": "#66AADD",
-        "pending": "#303030"
+        "pending": "#303030",
+        "perfect_color": "#FFFFFF"
     },
     "fail_policy": "acknowledge",
     "bury_policy": "acknowledge",
