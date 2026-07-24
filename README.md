@@ -19,12 +19,13 @@ Instead of tuning intervals by hand, you can generate them from a **desired rete
 - fetch the desired retention of the deck you select (averaged over its subdecks) and adapt the colouring to it.
 
 ### Perfect chunks
-Chunks where every card was answered with a passing grade can be highlighted with a special colour. You can choose whether Hard counts as perfect or whether only Good/Easy do.
+Chunks where every card was answered with a passing grade can be highlighted with diagonal stripes in a special colour, laid over the chunk's normal colour. You can choose whether Hard counts as perfect or whether only Good/Easy do.
 
 ### Session tracking
 - Progress is rebuilt from today's review log when you enter the reviewer, so it survives restarts, deck switches and syncs.
 - Failed cards can either be acknowledged (the bar grows to include the extra reviews, with the excess highlighted) or ignored.
-- Burying and suspending is detected — including from the menus — and can be acknowledged or ignored.
+- Burying, suspending and deleting are detected — including from the menus — each with its own colour and an acknowledge/ignore policy.
+- Redo re-adds the review to the bar, and undoing a non-review action (e.g. changing preferences) leaves the bar untouched.
 - Undo can either roll the bar back or mark the undone answer in its own colour.
 - New cards can optionally be counted twice, matching decks where a new card comes back once more the same day.
 

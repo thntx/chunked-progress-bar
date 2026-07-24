@@ -17,6 +17,7 @@ class SessionState:
         self.was_answered = False
         self.last_action_handled = False
         self.last_handled_card_id = None
+        self.pending_redo = False # Set when Anki's Redo action fires, consumed on op complete
 
 # Singleton instance
 session = SessionState()

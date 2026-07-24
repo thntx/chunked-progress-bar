@@ -29,6 +29,7 @@ def on_show_question(card):
     session.start_time = time.time()
 
 def on_answer(reviewer, card, ease):
+    session.pending_redo = False
     config = mw.addonManager.getConfig(__name__)
     fail_policy = get_config_val(config, DEFAULT_CONFIG, "fail_policy")
     use_cap = get_config_val(config, DEFAULT_CONFIG, "timer", "use_anki_cap")
@@ -95,7 +96,16 @@ def on_suspend(reviewer, card):
     session.last_action_handled = True
     _handle_other_event("suspend_policy", "suspended", card)
 
+def on_delete(reviewer, card):
+    if session.last_action_handled:
+        return
+    if session.last_handled_card_id == card.id:
+        return
+    session.last_action_handled = True
+    _handle_other_event("delete_policy", "deleted", card)
+
 def _handle_other_event(policy_key, result_code, card):
+    session.pending_redo = False
     config = mw.addonManager.getConfig(__name__)
     policy = get_config_val(config, DEFAULT_CONFIG, policy_key)
 
@@ -146,34 +156,67 @@ def _handle_other_event(policy_key, result_code, card):
         QTimer.singleShot(50, refresh_bar)
 
 
-def on_undo(action_name=None):
+def _op_touched_cards(changes):
+    """True if an OpChanges / OpChangesAfterUndo actually changed cards or notes
+    (a review, bury, suspend or delete). Ops that only touch config / the study
+    queue (e.g. Update Preferences) return False, so the bar ignores them."""
+    if changes is None:
+        return True  # unknown -> assume relevant (legacy safety)
+    inner = getattr(changes, "changes", changes)  # OpChangesAfterUndo -> OpChanges
+    try:
+        return bool(getattr(inner, "card", False) or getattr(inner, "note", False))
+    except Exception:
+        return True
+
+def on_undo(changes=None):
     if mw.state != "review":
         return
-    
+    # Ignore undos that did not touch cards (e.g. Update Preferences). The bar
+    # must not react to those.
+    if not _op_touched_cards(changes):
+        return
+
     config = mw.addonManager.getConfig(__name__)
     policy = get_config_val(config, DEFAULT_CONFIG, "undo_policy")
 
     if policy == "acknowledge":
-        # Check if we have a log to mark
+        # Mark the last tracked action as undone (grey out); keep the length.
         if session.status_log:
-            # Mark the last action as undone (grey out)
             session.status_log[-1] = "undone"
-            
             if len(session.time_log) == len(session.status_log):
                 session.time_log[-1] = 0
-            # We do NOT pop history or revert 'current' count.
     else:
-        # Standard Undo: Revert state
-        if session.history:
-            prev_current, prev_log, prev_time = session.history.pop()
-            session.current_count = prev_current
-            session.status_log = prev_log
-            session.time_log = prev_time
-            
+        # Standard undo: rebuild from the revlog (the source of truth). This drops
+        # the undone review's tile and correctly leaves the bar untouched when the
+        # undone op wasn't a tracked review.
+        reconstruct_history()
+
     # Reset last action handled so we can re-handle the same card if user retries
     session.last_handled_card_id = None
     session.last_action_handled = False
-    
+    session.pending_redo = False
+
+    QTimer.singleShot(50, refresh_bar)
+
+def on_redo_triggered(checked=False):
+    # Anki's Redo action (menu + Ctrl+Shift+Z) runs asynchronously and exposes no
+    # hook, so we just flag it here and reconcile in on_operation once the op lands.
+    if mw.state == "review":
+        session.pending_redo = True
+
+def on_operation(changes=None, handler=None):
+    # No-op unless we are waiting for a redo we flagged in on_redo_triggered.
+    if not getattr(session, "pending_redo", False):
+        return
+    session.pending_redo = False
+    if mw.state != "review" or not mw.col:
+        return
+    if not _op_touched_cards(changes):
+        return
+    # Redo re-applied a review: rebuild from the revlog so its tile comes back.
+    reconstruct_history()
+    session.last_handled_card_id = None
+    session.last_action_handled = False
     QTimer.singleShot(50, refresh_bar)
 
 def reconstruct_history():
@@ -227,56 +270,50 @@ def reconstruct_history():
 
 
     # MERGE MANUAL ACTIONS
-    # If recent manual actions are missing from DB (revlog), add them now.
+    # Bury / suspend / delete acknowledged during the session aren't in the revlog,
+    # so re-add a tile for each one that STILL applies to the card's current state.
+    # Verifying the live state (instead of a timestamp guess) also makes undo work:
+    # once an action is undone the card no longer matches, so its tile disappears on
+    # the next rebuild. Actions that no longer apply are pruned.
     if hasattr(session, "manual_actions") and session.manual_actions:
-        # Get IDs found in DB
-        db_cids = set(x[0] for x in entries)
-        
-        # Filter manual actions that are relevant to current session/deck
+        still_valid = []
         for action in session.manual_actions:
             cid = action["cid"]
             action_did = action.get("did")
-            
-            # If we have a stored DID, use it to verify session match
-            # Otherwise fall back to valid_cids check (legacy/safeguard)
+
+            # Keep (but don't render) actions that belong to a different deck.
             if action_did is not None:
                 if action_did != did:
+                    still_valid.append(action)
                     continue
             elif cid not in valid_cids:
-                # Fallback if did not missing (shouldn't happen with new code)
+                still_valid.append(action)
                 continue
-                
-            # Check if this card appeared in DB results recently?
-            # Revlog doesn't easily map back to "this specific action" without timestamp match.
-            # But "buried" usually doesn't create duplicate logs quickly.
-            # If the card is NOT in the DB entries we just fetched (for today), we assume it's missing.
-            # OR if it IS in DB, we assume DB covered it?
-            # Issue: User might review card (DB OK) then Bury it (DB Missing).
-            # So simple existence of CID in revlog isn't enough.
-            # We need to know if the LATEST action is there.
-            
-            # Simple heuristic: If the action time is > last DB entry time for this CID?
-            # Or just append if not found?
-            
-            # Use strict timestamp check?
-            # Action time is seconds. Revlog is ms.
-            action_ts_ms = action["time"] * 1000
-            
-            # Did we find an entry for this CID with similar timestamp?
-            # allowed skew: 2 seconds
-            found_in_db = False
-            for (dcid, dease, dtime) in entries:
-                if dcid == cid:
-                    if abs(dtime - action_ts_ms) < 5000: # 5 seconds window
-                         found_in_db = True
-                         break
-            
-            if not found_in_db:
-                session.status_log.append(action['type'])
-                session.time_log.append(action['elapsed'])
+
+            a_type = action.get("type")
+            applies = False
+            try:
+                queue = mw.col.get_card(cid).queue
+                if a_type == "buried":
+                    applies = queue in (-2, -3)
+                elif a_type == "suspended":
+                    applies = (queue == -1)
+                elif a_type == "deleted":
+                    applies = False  # card still exists -> no longer deleted
+                else:
+                    applies = True
+            except Exception:
+                # Card can't be loaded -> it has been deleted.
+                applies = (a_type == "deleted")
+
+            if applies:
+                session.status_log.append(a_type)
+                session.time_log.append(action.get("elapsed", 0))
                 session.current_count += 1
+                still_valid.append(action)
+            # else: action was undone/superseded -> drop it
 
-
+        session.manual_actions = still_valid
 
 
 def on_state_change(new_state, old_state):

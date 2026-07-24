@@ -173,15 +173,20 @@ class SettingsDialog(QDialog):
         colour_layout.addWidget(self.excess_label, 4, 2)
         self.excess_colour_btn = self.create_colour_btn(self.get("colors", "excess"), "excess")
         colour_layout.addWidget(self.excess_colour_btn, 4, 3)
-        
+
+        # Row 5: Deleted
+        colour_layout.addWidget(QLabel("Deleted:"), 5, 0)
+        self.deleted_colour_btn = self.create_colour_btn(self.get("colors", "deleted"), "deleted")
+        colour_layout.addWidget(self.deleted_colour_btn, 5, 1)
+
         # Checkboxes and their dependencies
         self.use_good_as_pass_cb = QCheckBox("Use Good for all pass")
         self.use_good_as_pass_cb.setChecked(self.get("visual_options", "use_good_for_all_pass"))
-        colour_layout.addWidget(self.use_good_as_pass_cb, 5, 0, 1, 2)
-        
+        colour_layout.addWidget(self.use_good_as_pass_cb, 6, 0, 1, 2)
+
         self.highlight_excess_cb = QCheckBox("Highlight excess chunks")
         self.highlight_excess_cb.setChecked(self.get("visual_options", "highlight_excess"))
-        colour_layout.addWidget(self.highlight_excess_cb, 5, 2, 1, 2) # Place next to it or below? User asked for checkbox "then make a checkbox..."
+        colour_layout.addWidget(self.highlight_excess_cb, 6, 2, 1, 2) # Place next to it or below? User asked for checkbox "then make a checkbox..."
         
         
         # Dependencies
@@ -409,7 +414,14 @@ class SettingsDialog(QDialog):
         self.suspend_policy_cb.setCurrentText(self.get("suspend_policy"))
         self.suspend_policy_cb.currentIndexChanged.connect(self.live_update_handler)
         policy_layout.addRow("Action on Suspend:", self.suspend_policy_cb)
-        
+
+        # Delete Policy
+        self.delete_policy_cb = NoScrollComboBox()
+        self.delete_policy_cb.addItems(["ignore", "acknowledge"])
+        self.delete_policy_cb.setCurrentText(self.get("delete_policy"))
+        self.delete_policy_cb.currentIndexChanged.connect(self.live_update_handler)
+        policy_layout.addRow("Action on Delete:", self.delete_policy_cb)
+
         # Undo Policy
         self.undo_policy_cb = NoScrollComboBox()
         self.undo_policy_cb.addItems(["undo", "acknowledge"])
@@ -893,6 +905,9 @@ class SettingsDialog(QDialog):
         self.chunk_spin.setValue(self.default_config["chunk_size"])
         self.double_new_cb.setChecked(self.default_config["double_new"])
         self.fail_policy_cb.setCurrentText(self.default_config["fail_policy"])
+        self.bury_policy_cb.setCurrentText(self.default_config["bury_policy"])
+        self.suspend_policy_cb.setCurrentText(self.default_config["suspend_policy"])
+        self.delete_policy_cb.setCurrentText(self.default_config["delete_policy"])
         self.undo_policy_cb.setCurrentText(self.default_config["undo_policy"])
         self.live_update_handler()
 
@@ -1323,6 +1338,7 @@ class SettingsDialog(QDialog):
         self.config["fail_policy"] = self.fail_policy_cb.currentText()
         self.config["bury_policy"] = self.bury_policy_cb.currentText()
         self.config["suspend_policy"] = self.suspend_policy_cb.currentText()
+        self.config["delete_policy"] = self.delete_policy_cb.currentText()
         self.config["undo_policy"] = self.undo_policy_cb.currentText()
         self.config["colors"] = self.colours
         

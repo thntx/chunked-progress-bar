@@ -226,11 +226,41 @@ else:
             return res
          Reviewer.onSuspend = _new_on_suspend
 
+# --- DELETE HOOKS ---
+# There is no reviewer_did_delete hook, so wrap the reviewer's delete method
+# directly (same pattern as the bury/suspend fallbacks). on_delete de-dupes.
+if hasattr(Reviewer, "delete_current_note"):
+    _old_delete_note = Reviewer.delete_current_note
+    def _new_delete_note(self, *args, **kwargs):
+        card = self.card
+        if card:
+            try:
+                logic.on_delete(self, card)
+            except:
+                pass
+
+        try:
+            res = _old_delete_note(self, *args, **kwargs)
+        except TypeError:
+            res = _old_delete_note(self)
+        return res
+    Reviewer.delete_current_note = _new_delete_note
+
 # Reliable Undo Hook
 if hasattr(aqt.gui_hooks, "state_did_undo"):
     aqt.gui_hooks.state_did_undo.append(logic.on_undo)
 elif hasattr(aqt.gui_hooks, "reviewer_did_undo"):
     aqt.gui_hooks.reviewer_did_undo.append(logic.on_undo)
+
+# Redo handling: Anki exposes no redo hook and its Redo action is already bound to
+# mw.redo, so we add a second slot to the action (fires for menu + Ctrl+Shift+Z)
+# and reconcile once the async op lands via operation_did_execute.
+try:
+    mw.form.actionRedo.triggered.connect(logic.on_redo_triggered)
+except Exception:
+    pass
+if hasattr(aqt.gui_hooks, "operation_did_execute"):
+    aqt.gui_hooks.operation_did_execute.append(logic.on_operation)
 
 # Settings (Note: layout.update_all_widgets is passed as callback)
 mw.addonManager.setConfigUpdatedAction(__name__, layout.update_all_widgets)

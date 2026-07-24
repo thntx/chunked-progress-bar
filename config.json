@@ -95,12 +95,14 @@
         "undone": "#404040",
         "buried": "#775544",
         "suspended": "#663333",
+        "deleted": "#666666",
         "current": "#66AADD",
         "pending": "#303030"
     },
     "fail_policy": "acknowledge",
     "bury_policy": "acknowledge",
     "suspend_policy": "acknowledge",
+    "delete_policy": "acknowledge",
     "undo_policy": "undo",
     "double_new": true,
     "text_options": {

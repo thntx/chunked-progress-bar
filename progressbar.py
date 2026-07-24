@@ -623,7 +623,8 @@ class ProgressBarWidget(QWidget):
                     buried_count = 0
                     suspended_count = 0
                     undone_count = 0
-                    
+                    deleted_count = 0
+
                     for s in chunk_slice:
                         # Map Status to Score
                         score = weights["good"]
@@ -648,7 +649,10 @@ class ProgressBarWidget(QWidget):
                         elif s == "suspended":
                             score = weights["good"]
                             suspended_count += 1
-                        
+                        elif s == "deleted":
+                            score = weights["good"]
+                            deleted_count += 1
+
                         scores.append(score)
                     
                     avg = sum(scores) / len(scores) if scores else weights["good"]
@@ -697,28 +701,31 @@ class ProgressBarWidget(QWidget):
                         if iv_start > avg + EPSILON:
                             break
 
-                    # Override for All-Buried / All-Suspended / All-Skipped
+                    # Override for All-Buried / All-Suspended / All-Deleted / All-Skipped
                     if chunk_slice:
                         if buried_count == len(chunk_slice):
                             final_color = self.runtime_colors["buried"]
                         elif suspended_count == len(chunk_slice):
                             final_color = self.runtime_colors["suspended"]
+                        elif deleted_count == len(chunk_slice):
+                            final_color = self.runtime_colors["deleted"]
                         elif undone_count == len(chunk_slice):
                             final_color = self.runtime_colors["undone"]
-                        elif buried_count + suspended_count == len(chunk_slice):
-                             # Mixed skipped (e.g. 5 buried, 5 suspended) -> Default to Buried or whichever is majority?
-                             # Let's say Buried is 'safer' color, or majority wins
-                             final_color = self.runtime_colors["buried"] if buried_count >= suspended_count else self.runtime_colors["suspended"]
+                        elif buried_count + suspended_count + deleted_count == len(chunk_slice):
+                             # Mixed skipped (buried/suspended/deleted) -> majority skip colour wins
+                             skip_counts = {"buried": buried_count, "suspended": suspended_count, "deleted": deleted_count}
+                             final_color = self.runtime_colors[max(skip_counts, key=skip_counts.get)]
 
                     # Perfect Chunk Override
                     # A chunk is perfect when every card in it was answered with a
                     # passing grade (Good/Easy, plus Hard if perfect_include_hard).
-                    # Anything else (Again, undone, buried, suspended) breaks it.
+                    # Anything else (Again, undone, buried, suspended, deleted) breaks it.
+                    # Instead of recolouring the tile, lay perfect-colour stripes over
+                    # its normal (highest) colour so the underlying grade stays visible.
                     if chunk_slice and self.get("visual_options", "highlight_perfect"):
                         include_hard = self.get("visual_options", "perfect_include_hard")
                         if all(self.is_perfect_grade(s, include_hard) for s in chunk_slice):
-                            final_color = self.runtime_colors.get("perfect_color", final_color)
-                            pattern_color = None
+                            pattern_color = self.runtime_colors.get("perfect_color", pattern_color)
 
                     # 3. Paint
                     if pattern_color:
@@ -1082,6 +1089,7 @@ class ProgressBarWidget(QWidget):
                             elif stat == "undone": color = self.runtime_colors["undone"]
                             elif stat == "buried": color = self.runtime_colors["buried"]
                             elif stat == "suspended": color = self.runtime_colors["suspended"]
+                            elif stat == "deleted": color = self.runtime_colors["deleted"]
                         
                         painter.fillRect(rect_f, color)
                     except Exception:
