@@ -466,8 +466,8 @@ class SettingsDialog(QDialog):
         io_layout = QVBoxLayout()
         io_desc = QLabel(
             "Save every add-on setting to a file, or load them back from one.\n\n"
-            "Importing replaces all current settings and closes this window; "
-            "reopen it to review the imported values."
+            "Importing replaces all current settings and updates this window right "
+            "away so you can review the imported values."
         )
         io_desc.setWordWrap(True)
         io_layout.addWidget(io_desc)
