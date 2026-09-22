@@ -75,6 +75,10 @@ def update_all_widgets(config):
     
     # Force logic refresh to apply new calculation settings (like double_new)
     from . import logic
+    if mw.state == "review":
+        # Policies such as Again/bury/suspend/delete affect which historical
+        # events are rendered, so a plain scheduler-count refresh is not enough.
+        logic.reconstruct_history()
     logic.refresh_bar()
 
 def apply_layout(config):
