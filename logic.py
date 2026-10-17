@@ -729,17 +729,8 @@ def on_state_change(new_state, old_state):
         session.pending_manual_actions = []
         reconstruct_history()
         QTimer.singleShot(0, refresh_bar)
-        if layout.chunk_widget:
-            layout.chunk_widget.show()
-            layout.chunk_widget.update()
-        if layout.card_widget:
-            layout.card_widget.show()
-            layout.card_widget.update()
-    elif new_state == "overview":
-        if layout.chunk_widget:
-            layout.chunk_widget.hide()
-        if layout.card_widget:
-            layout.card_widget.hide()
+    # D returns directly to deckBrowser, bypassing the deck overview.
+    layout.update_visibility(state=new_state)
 
 
 def on_collection_loaded(col=None):
@@ -768,7 +759,8 @@ def on_sync_finished():
 
 
 def refresh_bar():
-    if not mw.col or not _ensure_session_state():
+    # Queued refreshes can arrive after the user has already left the reviewer.
+    if mw.state != "review" or not mw.col or not _ensure_session_state():
         return
 
     counts = mw.col.sched.counts()

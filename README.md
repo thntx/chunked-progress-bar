@@ -39,7 +39,7 @@ Each bar can independently show:
 Every text element has its own colour, bold and outline settings. Text can hide itself automatically when tiles get too small, and the centred text gets out of the way while you **hover** over the bars so you can read the tile labels underneath.
 
 ### Layout
-Each bar can be placed at the top or bottom of the main window (or hidden), in any stacking order. All colours are customisable, including the ones for buried, suspended and undone cards.
+Each bar can be placed at the top or bottom of the main window (or hidden), in any stacking order. Bars are only visible while reviewing and disappear when you return to the deck list or leave the reviewer. All colours are customisable, including the ones for buried, suspended and undone cards.
 
 ## Settings
 

@@ -119,12 +119,20 @@ def apply_layout(config):
         if pos == "bottom":
              mw.mainLayout.addWidget(w)
 
-    # Visibility is primarily handled by logic (show/hide on state change),
-    # but re-applying layout might reset visibility if we aren't careful.
-    # We leave explicit show/hide to the logic module's on_state_change.
-    if mw.state == "review":
-        if chunk_pos != "hidden": chunk_widget.show()
-        if card_pos != "hidden": card_widget.show()
+    # Reparenting widgets can change their visibility, so always restore it.
+    update_visibility(config)
+
+def update_visibility(config=None, state=None):
+    """Show each enabled bar only while the main window is reviewing."""
+    if config is None:
+        config = mw.addonManager.getConfig(__name__)
+    if state is None:
+        state = mw.state
+
+    for widget, key in ((chunk_widget, "chunks"), (card_widget, "cards")):
+        if widget is not None:
+            position = get_config_val(config, DEFAULT_CONFIG, "positions", key)
+            widget.setVisible(state == "review" and position != "hidden")
 
 def refresh_widgets(total, current, status_log, time_log, start_time, initial_total):
     """Updates the data in both widgets"""
