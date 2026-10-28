@@ -29,6 +29,7 @@ class SessionState:
 
         # Reviewer presentation/action tracking.
         self.last_card_id = None
+        self.last_card_deck_id = None
         self.was_answered = False
         self.last_action_handled = False
         self.pending_manual_actions = []

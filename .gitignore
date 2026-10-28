@@ -1,5 +1,4 @@
 /meta.json
-/__pycache__
+__pycache__/
 /user_files/*.json
 /user_files/.progress_state-*.tmp
-/tests/__pycache__

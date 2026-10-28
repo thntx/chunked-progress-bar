@@ -1,6 +1,5 @@
 {
     "name": "Chunked Progress Bar",
-    "package": "chunked_progress_bar",
-    "dependencies": [],
-    "mod": 0
+    "package": "1724662218",
+    "conflicts": ["chunked_progress_bar"]
 }

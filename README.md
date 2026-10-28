@@ -23,6 +23,7 @@ Chunks where every card was answered with a passing grade can be highlighted wit
 
 ### Session tracking
 - Progress is rebuilt from today's review log when you enter the reviewer, so it survives restarts, deck switches and syncs.
+- Filtered subdecks work when reviewing through their parent: completed cards stay counted after returning home, and each filtered deck keeps its own review history. Bury, suspend, delete and undo also carry across parent/subdeck views.
 - Failed cards can either be acknowledged (the bar grows to include the extra reviews, with the excess highlighted) or ignored.
 - Burying, suspending and deleting are detected — including from the menus — each with its own colour and an acknowledge/ignore policy.
 - Redo re-adds the review to the bar, and undoing a non-review action (e.g. changing preferences) leaves the bar untouched.
@@ -54,3 +55,15 @@ In Anki, go to **Tools → Add-ons → Get Add-ons…**, paste this code and res
 ```
 
 You can also find it on [AnkiWeb](https://ankiweb.net/shared/info/1724662218).
+
+### Updating
+
+Use **Tools → Add-ons → Check for Updates**, accept the update, and restart Anki. Updates to this existing listing preserve your configuration and local session data.
+
+Local `.ankiaddon` packages use the same ID (`1724662218`) so they replace the existing add-on too. The older `chunked_progress_bar` package is marked as conflicting and is disabled if present, preventing duplicate bars.
+
+### Building and publishing
+
+Run `python tools/build_addon.py /path/to/chunked-progress-bar.ankiaddon`, then upload that file as an update to the **existing AnkiWeb listing 1724662218**. AnkiWeb supplies the release timestamp; keep the same listing so existing users receive the update through Anki's update checker.
+
+The build includes only code, default configuration, the manifest and the `user_files` readme. It excludes `meta.json`, saved session data, tests and Python caches.

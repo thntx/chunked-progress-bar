@@ -167,6 +167,41 @@ def _reviewer_card():
     return getattr(reviewer, "card", None)
 
 
+def _card_origin_deck_id(card=None, cid=None):
+    """Use the deck shown to the reviewer, before Anki returns a card home."""
+    if cid is None and card is not None:
+        cid = int(card.id)
+    if cid == session.last_card_id and session.last_card_deck_id is not None:
+        return int(session.last_card_deck_id)
+    if card is not None and card.id == cid:
+        return int(card.did)
+    if cid is not None and mw.col:
+        did = mw.col.db.scalar("select did from cards where id=?", cid)
+        if did is not None:
+            return int(did)
+    return _selected_deck_id()
+
+
+def _deck_tree_ids(did):
+    return {int(did)} | {int(child_id) for _, child_id in mw.col.decks.children(did)}
+
+
+def _home_decks_in_scope(deck_ids):
+    """Include home cards even while they are borrowed by a filtered deck."""
+    if not deck_ids:
+        return {}
+    ids = ",".join(str(int(did)) for did in sorted(deck_ids))
+    rows = mw.col.db.all(
+        f"select id, did, odid from cards where did in ({ids}) or odid in ({ids})"
+    )
+    homes = {}
+    for cid, did, odid in rows:
+        home_did = int(odid or did)
+        if home_did in deck_ids:
+            homes[int(cid)] = home_did
+    return homes
+
+
 def _elapsed_for_card(card):
     config = _config()
     use_cap = get_config_val(config, DEFAULT_CONFIG, "timer", "use_anki_cap")
@@ -186,7 +221,7 @@ def _queue_manual_intent(kind, cid, card=None):
     """Remember reviewer intent; commit only after Anki's operation succeeds."""
     if mw.state != "review" or not _ensure_session_state() or not cid:
         return
-    did = _selected_deck_id()
+    did = _card_origin_deck_id(card, cid)
     if not did:
         return
 
@@ -238,12 +273,11 @@ def _upsert_manual_action(action):
     Anki's redo stack is gone, so retaining the inactive record would only allow
     reconstruction to count the new live state twice.
     """
-    key = (int(action["did"]), int(action["cid"]), action["type"])
+    key = (int(action["cid"]), action["type"])
     session.manual_actions = [
         existing
         for existing in session.manual_actions
         if (
-            int(existing.get("did", -1)),
             int(existing.get("cid", -1)),
             existing.get("type"),
         )
@@ -407,14 +441,22 @@ def reconstruct_history():
         fail_policy = get_config_val(config, DEFAULT_CONFIG, "fail_policy")
         live_cids = set(mw.col.decks.cids(did, children=True))
         is_filtered = _is_filtered_deck(did)
+        scope_ids = _deck_tree_ids(did)
+        filtered_ids = {deck_id for deck_id in scope_ids if _is_filtered_deck(deck_id)}
+        home_decks = _home_decks_in_scope(scope_ids - filtered_ids)
         memberships = {
             deck_id: set(cids) for deck_id, cids in session.filtered_memberships.items()
         }
-        if is_filtered:
-            memberships.setdefault(int(did), set()).update(live_cids)
-            valid_cids = set(memberships[int(did)])
-        else:
-            valid_cids = live_cids
+        for filtered_id in filtered_ids:
+            filtered_cids = live_cids if filtered_id == int(did) else mw.col.decks.cids(filtered_id)
+            memberships.setdefault(filtered_id, set()).update(filtered_cids)
+
+        # Only pre-tracking reviews may use legacy membership as attribution.
+        # A card borrowed today must not import earlier reviews from elsewhere.
+        legacy_origins = {}
+        for filtered_id in sorted(filtered_ids):
+            for cid in memberships[filtered_id]:
+                legacy_origins.setdefault(int(cid), filtered_id)
 
         revlog_rows = _active_revlog_rows()
         revlog_by_id = {int(row[0]): row for row in revlog_rows}
@@ -430,25 +472,29 @@ def reconstruct_history():
 
             tracked = filtered_by_id.get(revlog_id)
             elapsed = float(elapsed_ms) / 1000.0
+            origin_did = None
             if is_filtered:
                 if tracked:
                     tracked_did, record = tracked
                     if tracked_did != int(did):
                         continue
                     elapsed = float(record.get("elapsed", elapsed))
+                    origin_did = tracked_did
                 else:
                     # Legacy migration path: before this release there was no
                     # durable filtered-deck attribution.  Trust the saved/live
-                    # cohort only for entries predating tracking, or cards that
-                    # are still visibly in this filtered deck now.
-                    if cid not in valid_cids:
+                    # cohort only for entries predating tracking.
+                    if cid not in legacy_origins or revlog_id >= int(session.tracking_started_ms):
                         continue
-                    if (
-                        revlog_id >= int(session.tracking_started_ms)
-                        and cid not in live_cids
-                    ):
-                        continue
-            elif cid not in valid_cids:
+                    origin_did = int(did)
+            elif tracked and tracked[0] in filtered_ids:
+                origin_did, record = tracked
+                elapsed = float(record.get("elapsed", elapsed))
+            elif cid in home_decks:
+                origin_did = home_decks[cid]
+            elif not tracked and revlog_id < int(session.tracking_started_ms):
+                origin_did = legacy_origins.get(cid)
+            if origin_did is None:
                 continue
 
             events.append(
@@ -460,7 +506,7 @@ def reconstruct_history():
                     "kind": "review",
                     "revlog_id": revlog_id,
                     "cid": cid,
-                    "did": int(did),
+                    "did": int(origin_did),
                 }
             )
 
@@ -477,7 +523,7 @@ def reconstruct_history():
                 timestamp_ms = int(action["time_ms"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if action_did != int(did):
+            if action_did not in scope_ids:
                 continue
             if not (session.day_start_ms <= timestamp_ms < session.day_end_ms):
                 continue
@@ -515,7 +561,7 @@ def reconstruct_history():
                 timestamp_ms = int(tombstone["timestamp_ms"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if tombstone_did != int(did):
+            if tombstone_did not in scope_ids:
                 continue
             if not (session.day_start_ms <= timestamp_ms < session.day_end_ms):
                 continue
@@ -549,7 +595,7 @@ def reconstruct_history():
 
     # Save filtered membership at reviewer entry, before reviewed cards begin
     # returning home.  Also persist tombstone cleanup after a redo.
-    if is_filtered or tombstones_changed:
+    if filtered_ids or tombstones_changed:
         _persist_state()
     return True
 
@@ -579,6 +625,7 @@ def on_show_question(card):
     # A card can legitimately appear again immediately after Again/relearning.
     # De-duplication is per presentation, never per card id across presentations.
     session.last_card_id = int(card.id)
+    session.last_card_deck_id = int(card.did)
     session.was_answered = False
     session.last_action_handled = False
     session.start_time = time.time()
@@ -599,7 +646,7 @@ def on_answer(reviewer, card, ease):
         session.status_log.append(int(ease))
         session.time_log.append(elapsed)
 
-    did = _selected_deck_id()
+    did = _card_origin_deck_id(card)
     if did and _is_filtered_deck(did):
         try:
             _record_filtered_review(int(did), card, int(ease), elapsed)
@@ -724,6 +771,7 @@ def on_state_change(new_state, old_state):
         if not _ensure_session_state():
             return
         session.last_card_id = None
+        session.last_card_deck_id = None
         session.last_action_handled = False
         session.was_answered = False
         session.pending_manual_actions = []

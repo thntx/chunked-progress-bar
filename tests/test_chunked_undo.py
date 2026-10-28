@@ -139,7 +139,7 @@ class ChunkedLogicTests(unittest.TestCase):
         card = self.col.sched.getCard()
         self.assertIsNotNone(card)
         self.mw.reviewer.card = card
-        self.state.start_time = time.time()
+        self.env["on_show_question"](card)
         self.col.sched.answerCard(card, ease)
         self.env["on_answer"](None, card, ease)
         return card
@@ -170,6 +170,230 @@ class ChunkedLogicTests(unittest.TestCase):
             raise AssertionError(kind)
         self.env["on_operation"](result)
         return result
+
+    def nested_filtered_deck(self, card_count=5, resched=True, home_inside=False):
+        parent = self.col.decks.id("Study")
+        if home_inside:
+            home = self.col.decks.get(self.did)
+            home["name"] = "Study::Home"
+            self.col.decks.save(home)
+        conf = self.col.decks.config_dict_for_deck_id(self.did)
+        conf["new"]["delays"] = [1]
+        self.col.decks.update_config(conf)
+        for _ in range(card_count):
+            self.card()
+        filtered = self.col.decks.new_filtered("Study::Section::Filtered")
+        deck = self.col.decks.get(filtered)
+        deck["terms"] = [[f'deck:"{self.col.decks.name(self.did)}"', 100, 0]]
+        deck["resched"] = resched
+        self.col.decks.save(deck)
+        self.col.sched.rebuild_filtered_deck(filtered)
+        self.col.decks.select(parent)
+        self.assertTrue(self.rebuild())
+        return parent, filtered
+
+    def check_parent_answers(self, resched):
+        parent, filtered = self.nested_filtered_deck(resched=resched)
+        expected = []
+        for ease in (1, 2, 3, 4):
+            with self.subTest(ease=ease):
+                self.answer_current(ease)
+                expected.append(ease)
+                self.env["on_operation"](NS(card=True, study_queues=True))
+                self.assertEqual(self.state.status_log, expected)
+        self.col.decks.select(filtered)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, expected)
+        self.col.decks.select(parent)
+        self.state.reset_collection_state()
+        self.rebuild()
+        self.assertEqual(self.state.status_log, expected)
+
+    def test_filtered_descendant_all_grades_survive_parent_rebuild_and_restart(self):
+        self.check_parent_answers(resched=True)
+
+    def test_filtered_preview_descendant_all_grades_survive_parent_rebuild(self):
+        self.check_parent_answers(resched=False)
+
+    def test_filtered_direct_entry_records_origin_before_card_returns_home(self):
+        _, filtered = self.nested_filtered_deck()
+        self.col.decks.select(filtered)
+        self.rebuild()
+        card = self.answer_current(4)
+        self.assertEqual(card.did, self.did)  # Anki mutates this same object.
+        self.assertIn(filtered, self.state.filtered_reviews)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4])
+
+    def test_filtered_parent_undo_redo_after_all_cards_return_home(self):
+        parent, filtered = self.nested_filtered_deck(card_count=2)
+        for _ in range(2):
+            self.answer_current(4)
+        self.assertEqual(self.col.decks.cids(filtered), [])
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4, 4])
+        changes = self.col.undo()
+        self.env["on_undo"](changes)
+        self.env["on_operation"](changes)
+        self.assertEqual(self.state.status_log, [4])
+        self.col.redo()
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4, 4])
+        self.col.decks.select(filtered)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4, 4])
+        self.col.decks.select(parent)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4, 4])
+
+    def test_filtered_parent_acknowledged_undo_visible_in_child_after_restart(self):
+        self.config["undo_policy"] = "acknowledge"
+        _, filtered = self.nested_filtered_deck()
+        self.answer_current(4)
+        self.rebuild()
+        changes = self.col.undo()
+        self.env["on_undo"](changes)
+        self.env["on_operation"](changes)
+        self.assertEqual(self.state.status_log, ["undone"])
+        self.state.reset_collection_state()
+        self.rebuild()
+        self.assertEqual(self.state.status_log, ["undone"])
+        self.col.redo()
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4])
+        changes = self.col.undo()
+        self.env["on_undo"](changes)
+        self.env["on_operation"](changes)
+        self.col.decks.select(filtered)
+        self.state.reset_collection_state()
+        self.rebuild()
+        self.assertEqual(self.state.status_log, ["undone"])
+
+    def test_filtered_child_reviews_aggregate_in_parent_without_duplicates(self):
+        parent, filtered = self.nested_filtered_deck(home_inside=True)
+        self.col.decks.select(filtered)
+        self.rebuild()
+        self.answer_current(4)
+        self.col.decks.select(parent)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4])
+
+    def test_home_history_survives_cards_borrowed_by_an_unrelated_filter(self):
+        parent = self.col.decks.id("Study")
+        home = self.col.decks.get(self.did)
+        home["name"] = "Study::Home"
+        self.col.decks.save(home)
+        card = self.card()
+        self.answer_current(4)
+        filtered = self.col.decks.new_filtered("Elsewhere")
+        deck = self.col.decks.get(filtered)
+        deck["terms"] = [[f"cid:{card.id}", 100, 0]]
+        self.col.decks.save(deck)
+        self.col.sched.rebuild_filtered_deck(filtered)
+        self.col.decks.select(parent)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4])
+
+    def test_borrowed_card_does_not_import_unrelated_home_reviews(self):
+        card = self.card()
+        self.answer_current(4)
+        parent = self.col.decks.id("Study")
+        filtered = self.col.decks.new_filtered("Study::Filtered")
+        deck = self.col.decks.get(filtered)
+        deck["terms"] = [[f"cid:{card.id}", 100, 0]]
+        self.col.decks.save(deck)
+        self.col.sched.rebuild_filtered_deck(filtered)
+        self.col.decks.select(parent)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [])
+        self.col.decks.select(filtered)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [])
+
+    def test_filtered_manual_actions_follow_origin_between_parent_and_child(self):
+        parent, filtered = self.nested_filtered_deck()
+        expected = []
+        for kind in ("buried", "suspended"):
+            with self.subTest(kind=kind):
+                self.col.decks.select(parent)
+                card = self.col.sched.getCard()
+                self.assertIsNotNone(card)
+                self.simulate_manual_operation(kind, card)
+                expected.append(kind)
+                self.col.decks.select(filtered)
+                self.rebuild()
+                self.assertEqual(self.state.status_log, expected)
+
+    def test_filtered_parent_manual_undo_redo_before_switching_context(self):
+        _, filtered = self.nested_filtered_deck()
+        card = self.col.sched.getCard()
+        self.simulate_manual_operation("buried", card)
+        changes = self.col.undo()
+        self.env["on_undo"](changes)
+        self.env["on_operation"](changes)
+        self.assertEqual(self.state.status_log, [])
+        self.col.redo()
+        self.rebuild()
+        self.assertEqual(self.state.status_log, ["buried"])
+        self.col.decks.select(filtered)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, ["buried"])
+
+    def test_moving_between_sibling_filters_keeps_review_histories_separate(self):
+        parent, first = self.nested_filtered_deck(card_count=1)
+        card = self.answer_current(4)
+        second = self.col.decks.new_filtered("Study::Second")
+        deck = self.col.decks.get(second)
+        deck["terms"] = [[f"cid:{card.id}", 100, 0]]
+        self.col.decks.save(deck)
+        self.col.sched.rebuild_filtered_deck(second)
+        self.col.decks.select(second)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [])
+        self.answer_current(3)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [3])
+        self.col.decks.select(first)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4])
+        self.col.decks.select(parent)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [4, 3])
+
+    def test_filtered_delete_from_parent_visible_in_child(self):
+        _, filtered = self.nested_filtered_deck()
+        card = self.col.sched.getCard()
+        self.env["on_show_question"](card)
+        self.env["on_delete"](None, card)
+        result = self.col.remove_notes([card.nid])
+        self.env["on_operation"](result)
+        self.col.decks.select(filtered)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, ["deleted"])
+
+    def test_repeated_manual_action_in_another_filter_replaces_old_origin(self):
+        _, first = self.nested_filtered_deck()
+        self.col.decks.select(first)
+        card = self.col.sched.getCard()
+        self.simulate_manual_operation("buried", card)
+        changes = self.col.undo()
+        self.env["on_undo"](changes)
+        self.env["on_operation"](changes)
+        self.col.sched.empty_filtered_deck(first)
+        second = self.col.decks.new_filtered("Study::Other")
+        deck = self.col.decks.get(second)
+        deck["terms"] = [[f"cid:{card.id}", 100, 0]]
+        self.col.decks.save(deck)
+        self.col.sched.rebuild_filtered_deck(second)
+        self.col.decks.select(second)
+        card = self.col.get_card(card.id)
+        self.simulate_manual_operation("buried", card)
+        self.col.decks.select(first)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, [])
+        self.col.decks.select(second)
+        self.rebuild()
+        self.assertEqual(self.state.status_log, ["buried"])
 
     def test_preserves_baseline_on_undo(self):
         card = self.card()
